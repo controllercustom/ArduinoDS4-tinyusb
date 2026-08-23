@@ -1,0 +1,31 @@
+# sketch.yaml — maintainer convenience for Arduino CLI 1.x profile builds.
+#
+# Normal library users (Arduino IDE) never need this file; it lives only in the
+# tests/ tree, never in examples/. Build/test with either a profile:
+#
+#   arduino-cli compile --profile esp32s3      tests/TestBasicFunctionality
+#   arduino-cli compile --profile feather52840 tests/TestBasicFunctionality
+#
+# or the explicit FQBN form documented in AGENTS.md, e.g.:
+#
+#   arduino-cli compile -b "esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc" #     --library <path>/ArduinoDS4-tinyusb tests/TestBasicFunctionality
+#
+# Other boards (use the explicit-FQBN form): rp2040
+# "rp2040:rp2040:rpipico:usbstack=tinyusb", SAMD21
+# "adafruit:samd:adafruit_feather_m0:usbstack=tinyusb", SAMD51
+# "adafruit:samd:adafruit_grandcentral_m4:usbstack=tinyusb".
+profiles:
+  esp32s3:
+    fqbn: esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc
+    platforms:
+      - platform: esp32:esp32 (3.3.11)
+    libraries:
+      - dir: ../..
+  feather52840:
+    fqbn: adafruit:nrf52:feather52840:softdevice=s140v6,debug=l0,debug_output=serial
+    platforms:
+      - platform: adafruit:nrf52 (1.7.0)
+        platform_index_url: https://adafruit.github.io/arduino-board-index/package_adafruit_index.json
+    libraries:
+      - dir: ../..
+default_profile: esp32s3

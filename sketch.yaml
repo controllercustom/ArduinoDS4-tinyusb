@@ -1,0 +1,39 @@
+# Pinned build profiles for the ArduinoDS4-tinyusb unified library.
+#
+# This file is the canonical record of the pinned toolchain/library versions for
+# every supported core. scripts/build.sh does NOT use `--profile` (arduino-cli
+# forbids `--library` together with `--profile`, and a profile build does not scan
+# user/libraries for the local library) — instead build.sh pins the exact same
+# versions via `arduino-cli core install` / `lib install` (see the case block in
+# build.sh). The profiles below document the pins per core.
+#
+# Notes:
+#   - ESP32-S3: core 3.3.11 + separate Adafruit TinyUSB Library 3.7.7 (the esp32
+#     core does not bundle TinyUSB). FQBN must include USBMode=default,CDCOnBoot=cdc.
+#   - RP2040:   core 6.0.0, TinyUSB bundled (usbstack=tinyusb).
+#   - SAMD:     core 1.7.17, TinyUSB bundled (usbstack=tinyusb).
+#   - nRF52840: core 1.7.0, TinyUSB bundled (single tier, SoftDevice S140 6.1.1).
+
+profiles:
+  esp32:
+    fqbn: esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc
+    platforms:
+      - platform: esp32:esp32 (3.3.11)
+        platform_index_url: https://espressif.github.io/arduino-esp32/package_esp32_index.json
+    libraries:
+      - dependency: Adafruit TinyUSB Library (3.7.7)
+  rp2040:
+    fqbn: rp2040:rp2040:rpipico:usbstack=tinyusb
+    platforms:
+      - platform: rp2040:rp2040 (6.0.0)
+        platform_index_url: https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
+  samd:
+    fqbn: adafruit:samd:adafruit_feather_m0:usbstack=tinyusb
+    platforms:
+      - platform: adafruit:samd (1.7.17)
+        platform_index_url: https://adafruit.github.io/arduino-board-index/package_adafruit_index.json
+  nrf52:
+    fqbn: adafruit:nrf52:feather52840:softdevice=s140v6,debug=l0,debug_output=serial
+    platforms:
+      - platform: adafruit:nrf52 (1.7.0)
+        platform_index_url: https://adafruit.github.io/arduino-board-index/package_adafruit_index.json

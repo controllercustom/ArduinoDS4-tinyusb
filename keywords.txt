@@ -1,0 +1,72 @@
+#######################################
+# Syntax Coloring Map for ArduinoDS4-tinyusb
+#######################################
+
+#######################################
+# Datatypes (KEYWORD1)
+#######################################
+
+DS4Gamepad	KEYWORD1
+DS4LED	KEYWORD1
+DS4Button	KEYWORD2
+DS4Hat	KEYWORD2
+DS4Touch	KEYWORD2
+
+#######################################
+# Methods and Functions (KEYWORD2)
+#######################################
+
+begin	KEYWORD2
+press	KEYWORD2
+release	KEYWORD2
+setButton	KEYWORD2
+getButton	KEYWORD2
+setStickLeft	KEYWORD2
+setStickRight	KEYWORD2
+setHat	KEYWORD2
+setDpad	KEYWORD2
+getHat	KEYWORD2
+setLeftTrigger	KEYWORD2
+setRightTrigger	KEYWORD2
+setTouch	KEYWORD2
+send	KEYWORD2
+ready	KEYWORD2
+isConnected	KEYWORD2
+releaseAll	KEYWORD2
+onLed	KEYWORD2
+onRumble	KEYWORD2
+onLedColor	KEYWORD2
+getLEDState	KEYWORD2
+getLEDColor	KEYWORD2
+setPollInterval	KEYWORD2
+
+#######################################
+# Constants (LITERAL1)
+#######################################
+
+DS4_BTN_SQUARE	LITERAL1
+DS4_BTN_CROSS	LITERAL1
+DS4_BTN_CIRCLE	LITERAL1
+DS4_BTN_TRIANGLE	LITERAL1
+DS4_BTN_L1	LITERAL1
+DS4_BTN_R1	LITERAL1
+DS4_BTN_L2	LITERAL1
+DS4_BTN_R2	LITERAL1
+DS4_BTN_SHARE	LITERAL1
+DS4_BTN_OPTIONS	LITERAL1
+DS4_BTN_L3	LITERAL1
+DS4_BTN_R3	LITERAL1
+DS4_BTN_PS	LITERAL1
+DS4_BTN_TOUCHPAD	LITERAL1
+DS4_BTN_COUNT	LITERAL1
+DS4_HAT_UP	LITERAL1
+DS4_HAT_UP_RIGHT	LITERAL1
+DS4_HAT_RIGHT	LITERAL1
+DS4_HAT_DOWN_RIGHT	LITERAL1
+DS4_HAT_DOWN	LITERAL1
+DS4_HAT_DOWN_LEFT	LITERAL1
+DS4_HAT_LEFT	LITERAL1
+DS4_HAT_UP_LEFT	LITERAL1
+DS4_HAT_CENTERED	LITERAL1
+DS4_TOUCH_MAX_X	LITERAL1
+DS4_TOUCH_MAX_Y	LITERAL1
