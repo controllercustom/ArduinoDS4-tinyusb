@@ -28,7 +28,7 @@
 #   done
 #
 # Speed up CI with a shared, read-only toolchain cache:
-#   AVENV_GOLDEN=/home/pi/.arduino15 scripts/build.sh esp32 examples/BasicGamepad
+#   AVENV_GOLDEN="$HOME/.arduino15" scripts/build.sh esp32 examples/BasicGamepad
 # (this repo is a library, so `aventools prime` — which compiles the target as a
 #  sketch — does not apply; the first build.sh run populates the golden cache
 #  via core/lib install.)
@@ -80,14 +80,26 @@ esac
 
 aventools_init "ds4tinyusb-$CORE_NAME"
 
+# Serialize installs when they mutate the shared golden cache: parallel builds
+# populating AVENV_GOLDEN on first use must not race (per aventools guidance).
+# lib installs land in the per-build user dir, but locking them too is cheap and
+# keeps all arduino-cli mutations serialized under concurrency.
+av_install() {
+  if [[ -n "$AVENV_GOLDEN" && -d "$AVENV_GOLDEN" ]]; then
+    flock "$AVENV_GOLDEN/.install.lock" arduino-cli "$@"
+  else
+    arduino-cli "$@"
+  fi
+}
+
 # Pin the core into the isolated env (reused from AVENV_GOLDEN if set; otherwise
 # downloaded once per build root).
-arduino-cli core install "$CORE"
+av_install core install "$CORE"
 
 # ESP32-S3 does not bundle TinyUSB — install the separate library (rp2040/samd/
 # nrf52 bundle it in their cores, so no separate install there).
 if [[ "$NEED_TINYUSB" -eq 1 ]]; then
-  arduino-cli lib install "Adafruit TinyUSB Library@3.7.7"
+  av_install lib install "Adafruit TinyUSB Library@3.7.7"
 fi
 
 # Some sketch dirs (e.g. tests/) ship a sketch.yaml with a default_profile.

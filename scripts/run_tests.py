@@ -17,6 +17,10 @@ Usage:
       --fqbn "rp2040:rp2040:rpipico:usbstack=tinyusb" \
       --upload --port /dev/ttyACM0 --e2e --uart /dev/ttyACM0
 
+  # Same, but inside the aventools virtual environment (pinned cores, isolated
+  # caches — see scripts/build.sh); CORE ∈ esp32|rp2040|samd|nrf52
+  python3 scripts/run_tests.py --isolated rp2040 --e2e --uart /dev/ttyACM0
+
 The library root is auto-detected (parent of scripts/).
 """
 
@@ -28,6 +32,9 @@ import sys
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 LIB_ROOT = os.path.dirname(SCRIPT_DIR)
 TESTS_DIR = os.path.join(LIB_ROOT, "tests")
+BUILD_SH = os.path.join(SCRIPT_DIR, "build.sh")
+
+ISOLATED_CORES = ["esp32", "rp2040", "samd", "nrf52"]
 
 TEST_SKETCHES = [
     "TestBasicFunctionality",
@@ -52,6 +59,15 @@ def upload_sketch(fqbn, sketch_dir, library, port):
     return run(cmd)
 
 
+def compile_isolated(core, sketch_dir, upload, port):
+    # build.sh <core> <sketch_dir> [extra arduino-cli args...] appends the extra
+    # args to its compile invocation, so -u/-p flow through for uploads.
+    cmd = ["bash", BUILD_SH, core, sketch_dir]
+    if upload:
+        cmd += ["-u", "-p", port]
+    return run(cmd)
+
+
 def run_e2e(uart, evdev):
     cmd = [sys.executable, os.path.join(TESTS_DIR, "test_e2e.py")]
     if uart:
@@ -63,10 +79,15 @@ def run_e2e(uart, evdev):
 
 def main():
     ap = argparse.ArgumentParser(description="ArduinoDS4-tinyusb test runner")
-    ap.add_argument("--fqbn", required=True,
-                    help="Fully Qualified Board Name, e.g. "
-                         "esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc "
-                         "or rp2040:rp2040:rpipico:usbstack=tinyusb")
+    target = ap.add_mutually_exclusive_group(required=True)
+    target.add_argument("--fqbn", default=None,
+                        help="Fully Qualified Board Name, e.g. "
+                             "esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc "
+                             "or rp2040:rp2040:rpipico:usbstack=tinyusb")
+    target.add_argument("--isolated", metavar="CORE", choices=ISOLATED_CORES,
+                        help="compile inside the aventools virtual environment "
+                             "(scripts/build.sh) for CORE ∈ esp32|rp2040|samd|nrf52; "
+                             "cores/libs are pinned and caches isolated")
     ap.add_argument("--upload", action="store_true", help="upload after compile")
     ap.add_argument("--port", help="serial port for upload (with --upload)")
     ap.add_argument("--e2e", action="store_true",
@@ -82,7 +103,9 @@ def main():
     failures = []
     for name in TEST_SKETCHES:
         sketch = os.path.join(TESTS_DIR, name)
-        if args.upload and args.port:
+        if args.isolated:
+            rc = compile_isolated(args.isolated, sketch, args.upload, args.port)
+        elif args.upload and args.port:
             rc = upload_sketch(args.fqbn, sketch, LIB_ROOT, args.port)
         else:
             rc = compile_sketch(args.fqbn, sketch, LIB_ROOT)

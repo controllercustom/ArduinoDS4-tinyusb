@@ -162,7 +162,7 @@ other cores bundle it in their platform. Versions are also recorded in
 Speed up builds by reusing the existing installed toolchain cache:
 
 ```bash
-export AVENV_GOLDEN=/home/pi/.arduino15
+export AVENV_GOLDEN="$HOME/.arduino15"
 ./scripts/build.sh esp32 examples/BasicGamepad   # first run caches core; later reuse it
 ```
 

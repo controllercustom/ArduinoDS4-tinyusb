@@ -69,11 +69,33 @@ It does NOT use `--profile` because arduino-cli forbids `--library`+`--profile`
 and profile builds ignore `user/libraries`. Some sketch dirs (the tests) ship a
 `sketch.yaml` with a `default_profile`; `build.sh` stages it aside during the
 compile so arduino-cli uses our explicit `--fqbn`/`--library`. Set
-`AVENV_GOLDEN=/home/pi/.arduino15` to reuse the existing installed toolchain
+`AVENV_GOLDEN="$HOME/.arduino15"` to reuse the existing installed toolchain
 cache; the first `build.sh` run populates it via `core install` / `lib install`
 (this repo is a library, so `aventools prime` — which compiles the target as a
 sketch — does not apply). The isolated `user/libraries` starts empty, so
 undeclared deps fail fast.
+
+### Offline builds (broken DNS / no network)
+
+The aventools `downloads` dir is per-build, so **library archives are
+re-downloaded on every build even with `AVENV_GOLDEN` set** (golden caches
+cores/tools only). When DNS breaks (arduino-cli symptom:
+`Download failed: ... dial tcp: lookup ... write udp ...: operation not
+permitted`), compile ESP32 sketches with `scripts/offline_build.sh`, which
+seeds `Adafruit TinyUSB Library@3.7.7` from the local
+`~/.arduino15/staging/libraries/*.zip` into the per-build sketchbook and skips
+`lib install`:
+
+```bash
+AVENV_GOLDEN="$HOME/.arduino15" ./scripts/offline_build.sh examples/AutoCycle -u -p /dev/ttyUSB0
+```
+
+TinyUSB's other declared deps (Adafruit NeoPixel, SdFat - Adafruit Fork,
+SPIFlash, MIDI) are tag-dependencies that nothing here `#include`s — they are
+not needed to compile. Other local cache sources for seeding:
+`~/.arduino15/internal/<Lib>_<ver>_<hash>/` (materialized by earlier
+`--profile` builds). RP2040/SAMD/nRF52 need no external libraries, so plain
+`build.sh <core>` works offline once their cores are in the golden cache.
 
 ## Dependencies
 
@@ -220,6 +242,33 @@ Output report 0x05 (rumble + LED) callbacks: `onRumble(left, right)`,
   platforms into `~/.arduino15/internal/…` copies.
 - **PS4 console**: this is a *PC*-style controller; console auth is impossible
   over USB.
+- **Serial monitor purges boot output**: USB-UART bridges (CP210x etc.) buffer
+  RX while no reader holds the tty, and the driver flushes them on first open.
+  A monitor opened *after* a reset therefore misses everything the sketch
+  printed during `setup()` — firmware looks silent/dead when it is fine (this
+  masqueraded as "no telemetry" for a whole test session). To capture boot or
+  `setup()` output, hold the port open ACROSS the reset: open with DTR/RTS
+  deasserted (`dtr=False, rts=False`), then reboot by pulsing EN —
+  `dtr=True; rts=False; sleep(0.15); dtr=False` (typical auto-reset circuit:
+  EN low when DTR=1/RTS=0; IO0 low when RTS=1/DTR=0; both asserted = neutral).
+- **Clone-CP210x wedge**: repeated pyserial opens can leave the bridge rejecting
+  control requests — kernel logs `cp210x ttyUSB0: failed set request 0x12
+  status: -110` and RX goes dead even though flashing still works. Fix without
+  replugging: rebind the driver (`echo <if> | sudo tee
+  /sys/bus/usb/drivers/cp210x/unbind`, then `/bind`; interface path from
+  `readlink -f /sys/class/tty/ttyUSB0/device/../..`).
+- **ESP32-S3 stuck in download mode after JTAG-serial flash**: flashing through
+  native USB (`303a:1001`) may leave the board in ROM download mode despite
+  esptool's "Hard resetting via RTS pin" — no USB disconnect appears in dmesg.
+  Repeat esptool resets often fail too, and OpenOCD `adapter driver
+  esp_usb_jtag` cannot attach while kernel `cdc_acm` binds the interface
+  (unbinding does not reliably help). Press RST physically, or pulse EN via a
+  wired UART bridge as above. Diagnose by listening across a reset: ROM banners
+  on UART0 prove wiring is good and point at app-side issues instead.
+- **ESP32-S3 boards without a UART bridge** (e.g. M5AtomS3): OTG-HID firmware
+  drops CDC and USB-Serial-JTAG shares the single connector, so every flash
+  needs manual download-mode entry and there is no telemetry path at all.
+  Prefer boards with an onboard bridge for test runs.
 
 ## Testing
 
@@ -273,7 +322,14 @@ python3 tests/validate_autocycle_pcap.py /tmp/ds4.pcap
 ### All-in-one runner
 
 `scripts/run_tests.py` compiles the three test sketches for a given FQBN and
-optionally uploads + runs the E2E harness.
+optionally uploads + runs the E2E harness. `--isolated <core>` (instead of
+`--fqbn`) routes each compile through `scripts/build.sh`, i.e. the aventools
+virtual environment with pinned cores/libraries:
+
+```bash
+python3 scripts/run_tests.py --isolated rp2040
+python3 scripts/run_tests.py --isolated esp32 --upload --port /dev/ttyUSB0
+```
 
 ### SAMD on-board verification (Arduino Zero cross-flash — verified)
 
@@ -317,6 +373,31 @@ Notes:
 - Under `sudo`, arduino-cli uses root's data dir — run harnesses directly
   (`sudo python3 tests/test_e2e.py`) instead of `run_tests.py` compile+upload,
   which needs the user's core cache.
+
+### ESP32-S3 on-board verification (dev module + CP210x bridge — verified)
+
+Rig: generic ESP32-S3 dev module; the onboard CP210x (UART0) serves **both**
+flashing and telemetry on `/dev/ttyUSB0` (sequential use only — logger and
+esptool cannot share the port), while the native USB enumerates the DS4 HID.
+Flashing needs no manual boot mode (auto-reset via the bridge). To see
+telemetry from `setup()`, hold `/dev/ttyUSB0` open ACROSS reset (see Gotchas:
+serial monitor purges boot output); harnesses that talk to a `loop()`-driven
+sketch (`BasicGamepad`, `TestOutputCallbacks`) work with late-opened ports.
+
+Results (2026-08-25, ESP32-S3 dev module, telemetry `/dev/ttyUSB0` @115200):
+
+| Test | Result |
+|---|---|
+| Compile battery: 5 examples + 3 tests, isolated esp32@3.3.11 | all OK (~33–34% flash) |
+| `TestBasicFunctionality` (on-board) | **PASS 68 / FAIL 0** |
+| `TestOutputCallbacks` + `test_output_packets.py` | **ALL TESTS PASSED**; board `PASS=50 FAIL=0 RUMBLE_PKTS=22 LED_PKTS=22` |
+| `test_e2e.py` vs `BasicGamepad` (evdev latency) | **PASS**; worst p99 2.11 ms, max 2.92 ms (<10 ms threshold) |
+| `AutoCycle` pcap validation (usbmon3, 963 reports, 39 phase groups) | **RESULT: PASS**, P0..P11 all PASS, 0 counter/battery errors |
+| `LatencyBenchmark` | 2652/2652 emissions, 0 sequence gaps (~4.8 s run ≈ 556 emits/s, UART-print bound) |
+
+Matches the SAMD Zero baseline (`TestBasicFunctionality` 68/0). Board
+enumerates as `054C:05C4`; `hid-playstation` binds automatically and injects
+palette/rumble reports at bind time.
 
 ## License
 

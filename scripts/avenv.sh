@@ -45,7 +45,7 @@ _aventools_die() { _aventools_err "$*"; return 1; }
 
 # Write the per-build arduino-cli config file.
 _aventools_write_config() {
-  local cfg="$1" data="$2" user="$3" dl="$4"
+  local cfg="$1" data="$2" user="$3" dl="$4" cache="$5"
   {
     echo "board_manager:"
     echo "    additional_urls:"
@@ -58,6 +58,14 @@ _aventools_write_config() {
     echo "    data: $data"
     echo "    user: $user"
     echo "    downloads: $dl"
+    # Pin the build cache INTO the per-build root. Without an explicit key,
+    # hosts whose standard arduino-cli.yaml sets build_cache.path (or which
+    # export ARDUINO_BUILD_CACHE_PATH) leak a SHARED cache dir into every
+    # build — two concurrent builds of the same sketch (different boards)
+    # then race in one sketch dir (.libsdetect.d / response-file corruption,
+    # 'ld: final link failed: bad value').
+    echo "build_cache:"
+    echo "    path: $cache/arduino"
   } > "$cfg"
 }
 
@@ -77,6 +85,9 @@ aventools_init() {
     AVENV_DATA="$AVENV_GOLDEN"
   else
     # Fully isolated core/toolchain cache for this build.
+    if [[ -n "$AVENV_GOLDEN" ]]; then
+      _aventools_err "WARNING: AVENV_GOLDEN='$AVENV_GOLDEN' is not a directory — falling back to FULL isolation (slow: re-downloads toolchains)."
+    fi
     AVENV_DATA="$AVENV_ROOT/data"
     mkdir -p "$AVENV_DATA"
   fi
@@ -86,7 +97,15 @@ aventools_init() {
   mkdir -p "$user/libraries" "$dl" "$cache"
 
   cfg="$AVENV_ROOT/arduino-cli.yaml"
-  _aventools_write_config "$cfg" "$AVENV_DATA" "$user" "$dl"
+  _aventools_write_config "$cfg" "$AVENV_DATA" "$user" "$dl" "$cache"
+
+  # Host-exported ARDUINO_* variables outrank EVERY config file (including
+  # ARDUINO_CONFIG_FILE itself). Observed failure mode: a host
+  # ARDUINO_BUILD_CACHE_PATH pointed all builds at one shared cache dir, so
+  # concurrent builds of the same sketch (different boards) corrupted each
+  # other. Drop the overrides so the per-build config file governs.
+  unset ARDUINO_BUILD_CACHE_PATH ARDUINO_DIRECTORIES_DATA \
+        ARDUINO_DIRECTORIES_DOWNLOADS ARDUINO_DIRECTORIES_USER
 
   export ARDUINO_CONFIG_FILE="$cfg"
   export XDG_CACHE_HOME="$cache"   # isolates the compile-cache (~/.cache/arduino)
@@ -117,10 +136,12 @@ aventools_prime() {
   AVENV_DATA="$AVENV_GOLDEN"
   local user="$AVENV_ROOT/user" dl="$AVENV_ROOT/downloads" cache="$AVENV_ROOT/cache" cfg="$AVENV_ROOT/arduino-cli.yaml"
   mkdir -p "$user/libraries" "$dl" "$cache"
-  _aventools_write_config "$cfg" "$AVENV_DATA" "$user" "$dl"
+  _aventools_write_config "$cfg" "$AVENV_DATA" "$user" "$dl" "$cache"
   export ARDUINO_CONFIG_FILE="$cfg"
   export XDG_CACHE_HOME="$cache"
   export AVENV_USER="$user"
+  unset ARDUINO_BUILD_CACHE_PATH ARDUINO_DIRECTORIES_DATA \
+        ARDUINO_DIRECTORIES_DOWNLOADS ARDUINO_DIRECTORIES_USER
 
   _aventools_err "aventools prime: fetching pinned platforms/libs into $AVENV_GOLDEN"
   # `compile` pulls the exact pinned platforms + libraries into the data dir.
