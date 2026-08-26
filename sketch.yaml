@@ -13,6 +13,7 @@
 #   - RP2040:   core 6.0.0, TinyUSB bundled (usbstack=tinyusb).
 #   - SAMD:     core 1.7.17, TinyUSB bundled (usbstack=tinyusb).
 #   - nRF52840: core 1.7.0, TinyUSB bundled (single tier, SoftDevice S140 6.1.1).
+#   - Renesas:  core 1.6.0 patched, TinyUSB bundled. Requires -DDISABLE_USB_SERIAL.
 
 profiles:
   esp32:
@@ -37,3 +38,15 @@ profiles:
     platforms:
       - platform: adafruit:nrf52 (1.7.0)
         platform_index_url: https://adafruit.github.io/arduino-board-index/package_adafruit_index.json
+  renesas_minima:
+    fqbn: arduino:renesas_uno:minima
+    platforms:
+      - platform: arduino:renesas_uno (1.6.0)
+    libraries:
+      - dir: .
+  renesas_nanor4:
+    fqbn: arduino:renesas_uno:nanor4
+    platforms:
+      - platform: arduino:renesas_uno (1.6.0)
+    libraries:
+      - dir: .

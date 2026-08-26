@@ -10,7 +10,7 @@
 # SdFat - Adafruit Fork, SPIFlash, MIDI) are tag-dependencies that nothing in
 # this library #includes — they are NOT needed to compile.
 #
-# Only esp32 needs this: rp2040/samd/nrf52 bundle TinyUSB in their cores, so
+# Only esp32 needs this: rp2040/samd/nrf52/renesas bundle TinyUSB in their cores, so
 # plain `build.sh <core>` works offline once the core is in AVENV_GOLDEN.
 #
 # Usage:

@@ -8,6 +8,8 @@ platforms from a single code base:
 - **Raspberry Pi Pico / RP2040** (arduino-pico core, TinyUSB)
 - **SAMD21 / SAMD51** (Adafruit SAMD core, USB Stack = TinyUSB)
 - **nRF52840** (Adafruit nRF52 core — TinyUSB always built)
+- **Arduino Nano R4 / UNO R4 Minima** (Renesas `arduino:renesas_uno` core —
+  requires the one-time `scripts/patch_renesas_core.sh`)
 
 It implements the full 64-byte DualShock 4 input report, the feature reports
 the Linux `hid-playstation` driver expects for enumeration, a touchpad, and
@@ -35,6 +37,28 @@ real PlayStation controller on Linux, Windows, and Android.
 | Raspberry Pi Pico   | `rp2040:rp2040:rpipico`      | TinyUSB (`usbstack=tinyusb`) |
 | SAMD21 (M0) / SAMD51 (M4) | `adafruit:samd:adafruit_feather_m0` / `adafruit:samd:adafruit_grandcentral_m4` | TinyUSB (`usbstack=tinyusb`) |
 | nRF52840            | `adafruit:nrf52:feather52840` | TinyUSB (always built; pick SoftDevice S140 6.1.1) |
+| Nano R4 / UNO R4 Minima | `arduino:renesas_uno:nanor4` / `:minima` | TinyUSB (patched core; see below) |
+
+### Renesas Nano R4 / UNO R4 Minima (`arduino:renesas_uno`)
+
+The stock core cannot present custom HID descriptors or the Sony VID/PID, so
+run the bundled patch script **once** after installing the core:
+
+```bash
+scripts/patch_renesas_core.sh        # Linux; .macos.sh / .windows.ps1 siblings
+```
+
+Then compile with `DISABLE_USB_SERIAL` so the HID gamepad is interface 0:
+
+```bash
+arduino-cli compile --fqbn arduino:renesas_uno:nanor4 \
+  --build-property compiler.cpp.extra_flags=-DDISABLE_USB_SERIAL \
+  --library ~/ArduinoDS4-tinyusb examples/BasicGamepad
+```
+
+Upload via double-tap reset (DFU). Output reports travel over control
+SET_REPORT — identical to real DS4-v1 USB hardware. Test telemetry uses
+`Serial1` on D0/D1.
 
 ## Installation (Arduino IDE)
 

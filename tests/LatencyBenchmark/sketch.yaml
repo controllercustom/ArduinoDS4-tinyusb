@@ -13,7 +13,8 @@
 # Other boards (use the explicit-FQBN form): rp2040
 # "rp2040:rp2040:rpipico:usbstack=tinyusb", SAMD21
 # "adafruit:samd:adafruit_feather_m0:usbstack=tinyusb", SAMD51
-# "adafruit:samd:adafruit_grandcentral_m4:usbstack=tinyusb".
+# "adafruit:samd:adafruit_grandcentral_m4:usbstack=tinyusb", Renesas
+# "arduino:renesas_uno:minima" or "arduino:renesas_uno:nanor4" (with -DDISABLE_USB_SERIAL).
 profiles:
   esp32s3:
     fqbn: esp32:esp32:esp32s3:USBMode=default,CDCOnBoot=cdc
@@ -26,6 +27,18 @@ profiles:
     platforms:
       - platform: adafruit:nrf52 (1.7.0)
         platform_index_url: https://adafruit.github.io/arduino-board-index/package_adafruit_index.json
+    libraries:
+      - dir: ../..
+  renesas_minima:
+    fqbn: arduino:renesas_uno:minima
+    platforms:
+      - platform: arduino:renesas_uno (1.6.0)
+    libraries:
+      - dir: ../..
+  renesas_nanor4:
+    fqbn: arduino:renesas_uno:nanor4
+    platforms:
+      - platform: arduino:renesas_uno (1.6.0)
     libraries:
       - dir: ../..
 default_profile: esp32s3

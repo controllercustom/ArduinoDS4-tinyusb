@@ -3,8 +3,9 @@
 ## Overview
 
 Unified Arduino library emulating a PlayStation DualShock 4-style USB gamepad
-(VID `054C`, PID `05C4`) on **ESP32-S3**, **RP2040/Pico** and **SAMD21/SAMD51**
-from one code base, using each core's built-in TinyUSB stack. Header +
+(VID `054C`, PID `05C4`) on **ESP32-S3**, **RP2040/Pico**, **SAMD21/SAMD51**,
+**nRF52840** and **Renesas RA4M1** (Nano R4 / UNO R4 Minima) from one code
+base, using each core's built-in TinyUSB stack. Header +
 implementation live in `src/`; the class is `DS4Gamepad`.
 
 ## Build & Upload (arduino-cli)
@@ -37,6 +38,16 @@ arduino-cli compile --fqbn "adafruit:nrf52:feather52840:softdevice=s140v6,debug=
   --library /home/pi/ArduinoDS4-tinyusb examples/BasicGamepad
 # or via the per-test sketch.yaml profiles (no --library allowed with --profile):
 arduino-cli compile --profile feather52840 tests/TestBasicFunctionality
+
+# Renesas Nano R4 / UNO R4 Minima — REQUIRES one-time scripts/patch_renesas_core.sh
+# (same patch as ArduinoXInput-tinyusb; idempotent; pinned to renesas_uno 1.6.0)
+# AND DISABLE_USB_SERIAL so the HID gamepad is interface 0. Stock FQBNs.
+arduino-cli compile --fqbn "arduino:renesas_uno:nanor4" \
+  --build-property compiler.cpp.extra_flags=-DDISABLE_USB_SERIAL \
+  --library /home/pi/ArduinoDS4-tinyusb examples/BasicGamepad
+arduino-cli compile --fqbn "arduino:renesas_uno:minima" \
+  --build-property compiler.cpp.extra_flags=-DDISABLE_USB_SERIAL \
+  --library /home/pi/ArduinoDS4-tinyusb tests/TestBasicFunctionality
 ```
 
 **ESP32-S3 FQBN must** include `USBMode=default,CDCOnBoot=cdc`. `CDCOnBoot=cdc`
@@ -104,6 +115,10 @@ not needed to compile. Other local cache sources for seeding:
 - **SAMD21/51**: `adafruit:samd` core v1.7.x (bundled TinyUSB; select via USB
   Stack menu). The stock `arduino:samd` Zero core has no TinyUSB and is NOT
   supported by this library.
+- **Renesas RA4M1**: `arduino:renesas_uno` core 1.6.0 **patched** by
+  `scripts/patch_renesas_core.sh` (identical patch file ships in both this
+  repo and ArduinoXInput-tinyusb — applying either one satisfies both).
+  Compile always with `-DDISABLE_USB_SERIAL`.
 - **nRF52840**: `adafruit:nrf52` core v1.7.0, SoftDevice S140 6.1.1 only
   (`softdevice=s140v6` — any other value fails link). Bundled TinyUSB; no USB
   Stack menu exists.
@@ -240,6 +255,24 @@ Output report 0x05 (rumble + LED) callbacks: `onRumble(left, right)`,
   (a shared dir leaves a stale `.hex` of whatever built last); odd
   `.libsdetect.d` errors → `rm -rf ~/.cache/arduino/`; profile builds resolve
   platforms into `~/.arduino15/internal/…` copies.
+- **Renesas CRITICAL — never run user callbacks inside the USB IRQ**: the HID
+  ACK-stage callback (`tud_hid_set_report_cb`) executes inside the USB
+  interrupt; a blocking user callback (UART telemetry print) deadlocks the
+  whole stack there (SWD-proved: callback entered, never exits; every later
+  control transfer times out until reset). The backend therefore stashes the
+  output report and dispatches it from an FspTimer pump @250 Hz, IRQ priority
+  14 (below USB) — the same proven pattern as ArduinoXInput-tinyusb. Do NOT
+  "simplify" this back to direct dispatch.
+- **Renesas specifics**: no Adafruit_USBD_HID — the patched core's weak hooks
+  (`__USBGetHIDReport`, `__USBGetVidPid`) install an IN-only HID interface
+  from our report descriptor with Sony VID/PID. Output reports therefore use
+  control SET_REPORT only (authentic DS4-v1 transport; `_setFeature()`
+  already normalizes it). Auto-send is cooperative like SAMD/nRF52. USB
+  strings remain Arduino's (cosmetic; binding is VID/PID-based). Stock HID
+  interface polls at its fixed interval (~10 ms). Unique pairing MAC comes
+  from `R_BSP_UniqueIdGet()`. Telemetry = `Serial1` (D0/D1). J-Link SWD
+  flashing works through the 0x0 flash alias (`loadfile <sketch>.ino.hex`,
+  device `R7FA4M1AB`) — bypasses DFU double-tap entirely.
 - **PS4 console**: this is a *PC*-style controller; console auth is impossible
   over USB.
 - **Serial monitor purges boot output**: USB-UART bridges (CP210x etc.) buffer
@@ -272,7 +305,7 @@ Output report 0x05 (rumble + LED) callbacks: `onRumble(left, right)`,
 
 ## Testing
 
-Verified SAMD/nRF52 results are recorded in `tests/BASELINE.md` — re-run and compare
+Verified SAMD/nRF52/**Renesas** results are recorded in `tests/BASELINE.md` — re-run and compare
 against it after any library change.
 
 ### On-board unit tests

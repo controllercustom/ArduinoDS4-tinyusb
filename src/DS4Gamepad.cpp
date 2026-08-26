@@ -3,13 +3,16 @@
 
 // Unified DS4 (DualShock 4-style) gamepad emulation.
 // Supports ESP32-S3 (esp32 core), RP2040/Pico (arduino-pico core),
-// SAMD21/SAMD51 (adafruit:samd core, USB Stack = TinyUSB) and
-// nRF52840 (adafruit:nrf52 core — always builds TinyUSB).
+// SAMD21/SAMD51 (adafruit:samd core, USB Stack = TinyUSB),
+// nRF52840 (adafruit:nrf52 core — always builds TinyUSB) and
+// Renesas RA4M1 (arduino:renesas_uno core — Nano R4 / UNO R4 Minima,
+// requires scripts/patch_renesas_core.sh + DISABLE_USB_SERIAL).
 
 #if (defined(ARDUINO_ARCH_RP2040) && defined(USE_TINYUSB)) || \
     (defined(ARDUINO_ARCH_SAMD) && defined(USE_TINYUSB)) || \
     (defined(ARDUINO_ARCH_NRF52) && defined(USE_TINYUSB)) || \
-    defined(ARDUINO_ARCH_ESP32)
+    defined(ARDUINO_ARCH_ESP32) || \
+    defined(ARDUINO_ARCH_RENESAS)
 
 #include "DS4Gamepad.h"
 #include <cstring>
@@ -23,6 +26,10 @@
 #elif defined(ARDUINO_ARCH_NRF52)
 // Unique id comes from FICR->DEVICEID (via Arduino.h -> nrf.h); no extra
 // includes required.
+#elif defined(ARDUINO_ARCH_RENESAS)
+// Unique id comes from R_BSP_UniqueIdGet() (FSP BSP, via Arduino.h); no extra
+// includes required.
+#include "FspTimer.h"
 #else
 #include <WiFi.h>
 #include <esp_timer.h>
@@ -81,7 +88,7 @@ static uint8_t rep_12[] = {
 // Microsecond timestamp helper (telemetry only).
 #if defined(ARDUINO_ARCH_RP2040)
 uint64_t ds4_micros() { return time_us_64(); }
-#elif defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52)
+#elif defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52) || defined(ARDUINO_ARCH_RENESAS)
 uint64_t ds4_micros() { return (uint64_t)micros(); }
 #else
 uint64_t ds4_micros() { return (uint64_t)esp_timer_get_time(); }
@@ -210,6 +217,115 @@ static const uint8_t gp_report_desc[] = {
 
 // Byte offsets WITHIN the SendReport payload (report id is prepended by the
 // stack, so payload[0] corresponds to byte [1]).
+
+#if defined(ARDUINO_ARCH_RENESAS)
+// ---------------------------------------------------------------------------
+// Renesas RA4M1 (Nano R4 / UNO R4 Minima) USB glue.
+//
+// The stock arduino:renesas_uno core has no Adafruit TinyUSB wrapper. Instead,
+// the patched core (scripts/patch_renesas_core.sh) provides two weak hooks
+// that this file implements strongly:
+//   __USBGetHIDReport  - the stock composite builder installs an HID class
+//                        interface (IN EP only) using our report descriptor;
+//   __USBGetVidPid     - Sony VID/PID override (lazy-safe: the device
+//                        descriptor is rebuilt on every host request).
+//
+// Build with DISABLE_USB_SERIAL so no CDC/DFU interface is installed and the
+// HID gamepad becomes interface 0 — the shape real DualShock 4 hardware
+// presents and what the Linux hid-playstation driver expects to bind.
+//
+// Output reports (rumble/LED, id 0x05) arrive via control SET_REPORT — the
+// same transport as real DS4-v1 hardware, which also has no interrupt OUT
+// endpoint on USB.
+// ---------------------------------------------------------------------------
+
+static uint16_t ds4_vid = 0x054C;
+static uint16_t ds4_pid = 0x05C4;
+
+// Pending output report (deferred SET_REPORT dispatch, see tud_hid_set_report_cb)
+static uint8_t  ds4_outBuf[64];
+static uint16_t ds4_outLen = 0;
+static uint8_t  ds4_outId = 0;
+static volatile bool ds4_outPending = false;
+void ds4DispatchPendingOutput();
+
+extern "C" bool __USBGetVidPid(uint16_t *vid, uint16_t *pid) {
+  *vid = ds4_vid;
+  *pid = ds4_pid;
+  return true;
+}
+
+// NOTE: declared in the core's USB.h with C++ linkage (unlike the two
+// patch-added hooks above), so this definition must not be extern "C".
+uint8_t *__USBGetHIDReport(size_t *len) {
+  *len = sizeof(gp_report_desc);
+  return reinterpret_cast<uint8_t *>(const_cast<uint8_t *>(gp_report_desc));
+}
+
+// TinyUSB HID class callbacks (weak in hid_device.h), forwarded to the
+// static shims that the other platforms wire up through Adafruit_USBD_HID.
+
+extern "C" uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
+                                          hid_report_type_t report_type,
+                                          uint8_t *buffer, uint16_t reqlen);
+extern "C" uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
+                                          hid_report_type_t report_type,
+                                          uint8_t *buffer, uint16_t reqlen) {
+  (void)instance;
+  return DS4Gamepad::_getReportCb(report_id, report_type, buffer, reqlen);
+}
+
+extern "C" void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
+                                      hid_report_type_t report_type,
+                                      uint8_t const *buffer, uint16_t bufsize);
+extern "C" void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
+                                      hid_report_type_t report_type,
+                                      uint8_t const *buffer, uint16_t bufsize) {
+  (void)instance;
+  // This callback executes inside the USB interrupt. User callbacks may
+  // block (e.g. UART telemetry prints), and blocking here deadlocks the
+  // stack on RA4M1 — so stash the report and let the deferred dispatcher
+  // below (called from non-ISR library entry points) deliver it.
+  if (!ds4_outPending && bufsize <= sizeof(ds4_outBuf)) {
+    memcpy(ds4_outBuf, buffer, bufsize);
+    ds4_outLen = bufsize;
+    ds4_outId = report_id;
+    ds4_outPending = true;
+  }
+}
+
+void ds4DispatchPendingOutput() {
+  if (ds4_outPending) {
+    ds4_outPending = false;
+    DS4Gamepad::_setReportCb(ds4_outId, HID_REPORT_TYPE_OUTPUT, ds4_outBuf, ds4_outLen);
+  }
+}
+
+// Low-priority (14 < USB) GPT pump: delivers deferred output reports from a
+// context where blocking calls (UART telemetry prints in user callbacks) are
+// safe. Same proven pattern as the ArduinoXInput-tinyusb Renesas backend.
+static FspTimer ds4_pumpTimer;
+static bool ds4_pumpStarted = false;
+static void ds4_pumpCallback(timer_callback_args_t *arg) {
+  (void)arg;
+  ds4DispatchPendingOutput();
+}
+static void ds4StartPump() {
+  if (ds4_pumpStarted) return;
+  uint8_t type = GPT_TIMER;
+  int8_t ch = FspTimer::get_available_timer(type);
+  if (ch < 0) {
+    FspTimer::force_use_of_pwm_reserved_timer();
+    ch = FspTimer::get_available_timer(type, true);
+    if (ch < 0) return;
+  }
+  if (!ds4_pumpTimer.begin(TIMER_MODE_PERIODIC, type, (uint8_t)ch, 250.0f /*4 ms*/, 50.0f, ds4_pumpCallback)) return;
+  if (!ds4_pumpTimer.setup_overflow_irq(14)) { ds4_pumpTimer.end(); return; }
+  if (!ds4_pumpTimer.open()) { ds4_pumpTimer.end(); return; }
+  ds4_pumpStarted = ds4_pumpTimer.start();
+}
+#endif /* ARDUINO_ARCH_RENESAS */
+
 enum {
   OFF_LX      = 0,   // report [1]
   OFF_LY      = 1,   // report [2]
@@ -256,6 +372,17 @@ void DS4Gamepad::begin() {
     ds4ReadUniqueMac(base);
 #elif defined(ARDUINO_ARCH_NRF52)
     ds4ReadUniqueMac(base);
+#elif defined(ARDUINO_ARCH_RENESAS)
+    {
+      const bsp_unique_id_t *t = R_BSP_UniqueIdGet();
+      // Same words the core uses for its USB serial string.
+      base[0] = (uint8_t)(t->unique_id_words[0] & 0xFF);
+      base[1] = (uint8_t)((t->unique_id_words[0] >> 8) & 0xFF);
+      base[2] = (uint8_t)((t->unique_id_words[0] >> 16) & 0xFF);
+      base[3] = (uint8_t)(t->unique_id_words[1] & 0xFF);
+      base[4] = (uint8_t)((t->unique_id_words[1] >> 8) & 0xFF);
+      base[5] = (uint8_t)((t->unique_id_words[1] >> 16) & 0xFF);
+    }
 #else
     WiFi.macAddress(base);
 #endif
@@ -283,6 +410,13 @@ void DS4Gamepad::begin() {
   // descriptor fields afterwards. Do NOT call TinyUSBDevice.begin() — the
   // core already initialized the stack.
   Serial.end();
+#elif defined(ARDUINO_ARCH_RENESAS)
+  // The patched arduino:renesas_uno core builds its descriptors from our
+  // __USBGetHIDReport/__USBGetVidPid hooks during main()'s __USBStart() —
+  // before setup() runs — so VID/PID and the HID interface are already
+  // correct at enumeration time. There is deliberately NO Serial.end() /
+  // detach-attach dance here: with DISABLE_USB_SERIAL no other interface is
+  // ever installed.
 #else
   // The ESP32-S3 core only starts USB-OTG when a USB interface is enabled at
   // boot. The build must enable TinyUSB/CDC so the core calls tinyusb_init().
@@ -294,6 +428,7 @@ void DS4Gamepad::begin() {
   TinyUSBDevice.clearConfiguration();
 #endif
 
+#if !defined(ARDUINO_ARCH_RENESAS)
   TinyUSBDevice.setID(0x054C, 0x05C4);                       // PlayStation style controller
   TinyUSBDevice.setManufacturerDescriptor("Sony Computer Entertainment");
   TinyUSBDevice.setProductDescriptor("Wireless Controller");
@@ -312,8 +447,14 @@ void DS4Gamepad::begin() {
     delay(10);
     TinyUSBDevice.attach();
   }
+#else
+  // Hooks are already live (static initializers + patched core); start the
+  // deferred-output pump and nothing else.
+  _connected = true;
+  ds4StartPump();
+#endif
 
-#if defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52)
+#if defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52) || defined(ARDUINO_ARCH_RENESAS)
   // Reset the cooperative auto-send cadence so a poll interval configured
   // before begin() does not fire an immediate burst after mount.
   _lastAutoSendMs = millis();
@@ -504,7 +645,11 @@ bool DS4Gamepad::sendGamepadReport() {
 
   timestamp += 188;
 
+#if defined(ARDUINO_ARCH_RENESAS)
+  bool sent = tud_hid_report(1, report, sizeof(report));
+#else
   bool sent = hid.sendReport(1, report, sizeof(report));
+#endif
   // Advance the 6-bit counter only on a successful queue. If the endpoint is
   // busy (e.g. an explicit send() collides with the auto-send timer), a failed
   // send must NOT advance the counter — otherwise the on-wire sequence skips,
@@ -620,7 +765,11 @@ void DS4Gamepad::releaseAll() {
 
 bool DS4Gamepad::ready() {
   _pumpAutoSend();
+#if defined(ARDUINO_ARCH_RENESAS)
+  return tud_hid_ready();
+#else
   return hid.ready();
+#endif
 }
 
 void DS4Gamepad::_refreshMount() const {
@@ -640,6 +789,9 @@ void DS4Gamepad::_refreshMount() const {
 
 bool DS4Gamepad::isConnected() const {
   if (!_connected) return false;
+#if defined(ARDUINO_ARCH_RENESAS)
+  ds4DispatchPendingOutput();
+#endif
   _refreshMount();
   // Allow writes only after a short settling period post-mount.
   if (_usbReady && ((unsigned long)(millis() - _mountedAt)) < 100UL) return false;
@@ -647,10 +799,16 @@ bool DS4Gamepad::isConnected() const {
 }
 
 uint8_t DS4Gamepad::getLEDState() const {
+#if defined(ARDUINO_ARCH_RENESAS)
+  ds4DispatchPendingOutput();
+#endif
   return ledStateValue;
 }
 
 DS4Gamepad::DS4LED DS4Gamepad::getLEDColor() const {
+#if defined(ARDUINO_ARCH_RENESAS)
+  ds4DispatchPendingOutput();
+#endif
   if (!ledColorReceived) return DS4Gamepad::DS4LED{0xFF, 0xFF, 0xFF}; // never-set sentinel
   return ledColorValue;
 }
@@ -674,7 +832,7 @@ uint32_t DS4Gamepad::setPollInterval(uint32_t ms) {
     cancel_repeating_timer(&_timer);
     _timerStarted = false;
   }
-#elif defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52)
+#elif defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52) || defined(ARDUINO_ARCH_RENESAS)
   // Cooperative auto-send: nothing to cancel.
 #else
   if (_timerHandle != nullptr) {
@@ -697,7 +855,7 @@ uint32_t DS4Gamepad::setPollInterval(uint32_t ms) {
     _timerStarted = add_repeating_timer_ms(static_cast<int32_t>(_pollIntervalMs),
                                            &DS4Gamepad::_timerCallback,
                                            this, &_timer);
-#elif defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52)
+#elif defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52) || defined(ARDUINO_ARCH_RENESAS)
     // Reset the cadence so switching intervals does not fire an immediate burst.
     _lastAutoSendMs = millis();
 #else
@@ -716,7 +874,7 @@ uint32_t DS4Gamepad::setPollInterval(uint32_t ms) {
   return oldMs;
 }
 
-#if defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52)
+#if defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52) || defined(ARDUINO_ARCH_RENESAS)
 // Cooperative auto-send pump (see header note): called from every public
 // setter and ready(). No-op unless a poll interval is configured.
 void DS4Gamepad::_pumpAutoSend() {
@@ -727,7 +885,7 @@ void DS4Gamepad::_pumpAutoSend() {
   sendGamepadReport();
 }
 
-#else /* !SAMD/nRF52: free-running timer callbacks */
+#else /* !SAMD/nRF52/Renesas: free-running timer callbacks */
 
 // Auto-send runs from the OS-timer callback below; setters need not pump.
 void DS4Gamepad::_pumpAutoSend() {}
@@ -764,6 +922,6 @@ void IRAM_ATTR DS4Gamepad::_timerCallback(void* arg) {
 }
 #endif /* ARDUINO_ARCH_RP2040 */
 
-#endif /* !SAMD/nRF52 */
+#endif /* !SAMD/nRF52/Renesas */
 
 #endif /* platform guard */

@@ -234,3 +234,32 @@ hardware paths: SAMD21, SAMD51, nRF52840). Re-run the battery after any
 library change and compare. ESP32-S3 and RP2040 baselines are unchanged by the
 ports (guards only add platforms); re-verify there if shared code paths are
 touched.
+
+
+## Renesas RA4M1 — UNO R4 Minima (2026-08-26)
+
+Board: UNO R4 Minima (`R7FA4M1AB`, patched `arduino:renesas_uno` 1.6.0 via
+`scripts/patch_renesas_core.sh`; builds with `-DDISABLE_USB_SERIAL`). Flashed
+via SEGGER J-Link SWD through the 0x0 flash alias (device `R7FA4M1AB`,
+`loadfile <sketch>.ino.hex` — app links at 0x4000). Telemetry: FTDI on D0/D1
+(`/dev/ttyUSB0`, 115200). Native USB enumerates as `054C:05C4`; kernel
+`hid-playstation` binds automatically (feature report 0x81 served →
+"Registered DualShock4 controller").
+
+| Test | Result |
+|---|---|
+| Compile battery: 5 examples + 3 tests × nanor4/minima | **16/16 OK** (~17–21% flash) |
+| Regression spot-compiles rpipico + Grand Central M4 | OK |
+| `TestBasicFunctionality` (on-board) | PASS 6/FAIL 0 at PRE-USB stage |
+| `TestOutputCallbacks` + `test_output_packets.py` | **ALL TESTS PASSED**; board `PASS=44 FAIL=0 RUMBLE_PKTS=19 LED_PKTS=19` (control SET_REPORT transport, deferred dispatch) |
+| `test_e2e.py` vs `BasicGamepad` (evdev latency) | **PASS**; worst p99 6.08 ms, max 6.82 ms (<10 ms threshold) |
+| `AutoCycle` pcap validation (usbmon3, DURATION=75, 1430 packets) | **RESULT: PASS**, P2..P11 all PASS (2 groups each), 0 counter/battery errors |
+
+Notes:
+- Output reports use control SET_REPORT only (IN-only interface, authentic
+  DS4-v1 shape). `scripts/test_output_packets.py` auto-detects the missing
+  OUT endpoint and falls back to ctrl transfers (`wValue = 0x0200 | id`).
+- The stock core's HID IN interval is fixed (~10 ms), so AutoCycle phases run
+  ~2.5× longer than on 4 ms platforms — capture with `DURATION=75`.
+- User callbacks MUST be dispatched outside the USB IRQ (FspTimer pump) — see
+  AGENTS.md "Renesas CRITICAL".

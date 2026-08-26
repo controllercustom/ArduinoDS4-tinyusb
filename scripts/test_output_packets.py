@@ -48,6 +48,9 @@ except ImportError:
 DS4_VID = 0x054C
 DS4_PID = 0x05C4
 
+# Interrupt OUT endpoint address on Adafruit-TinyUSB backends. Set to None
+# automatically in find_device() when the active configuration has no OUT
+# endpoint (Renesas RA4M1 build = IN-only, control SET_REPORT transport).
 OUT_ENDPOINT = 0x01
 
 # Constant LED red used on rumble-only packets so CB_LED lines never collide
@@ -81,6 +84,23 @@ def detach_kernel_driver(dev):
         pass
 
 
+def detect_out_endpoint(dev):
+    """None when the active config has no interrupt OUT endpoint."""
+    global OUT_ENDPOINT
+    try:
+        cfg = dev.get_active_configuration()
+    except usb.core.USBError:
+        OUT_ENDPOINT = None
+        return
+    for intf in cfg:
+        for ep in intf:
+            if usb.util.endpoint_direction(ep.bEndpointAddress) == usb.util.ENDPOINT_OUT:
+                OUT_ENDPOINT = ep.bEndpointAddress
+                return
+    OUT_ENDPOINT = None
+    print("  No interrupt OUT endpoint - using control SET_REPORT (DS4-v1 transport)")
+
+
 def make_pkt(motor_right: int, motor_left: int, red: int,
              green: int = 0, blue: int = 0) -> bytes:
     """Build a 32-byte DS4 output report 0x05.
@@ -103,7 +123,17 @@ def make_pkt(motor_right: int, motor_left: int, red: int,
 
 
 def send_pkt(dev, pkt) -> bool:
+    # Platforms whose HID interface has an interrupt OUT endpoint (all
+    # Adafruit-TinyUSB backends) take the dev.write() path. The Renesas RA4M1
+    # build is interface-0 IN-only (authentic DS4-v1 shape), so output reports
+    # go over control SET_REPORT (bmRequestType 0x21, bRequest 0x09,
+    # wValue = 0x0300 | report_id) — the same transport the Linux
+    # hid-playstation driver uses for such hardware.
     try:
+        if OUT_ENDPOINT is None:
+            # wValue = (report_type << 8) | report_id; OUTPUT = 0x02
+            dev.ctrl_transfer(0x21, 0x09, 0x0200 | pkt[0], 0, pkt)
+            return True
         n = dev.write(OUT_ENDPOINT, pkt)
         return n == len(pkt)
     except usb.core.USBError as e:
@@ -298,6 +328,7 @@ def main():
     try:
         detach_kernel_driver(dev)
         usb.util.claim_interface(dev, 0)
+        detect_out_endpoint(dev)
         print("  Interface claimed")
     except Exception as e:
         print("ERROR claiming interface: %s" % e)

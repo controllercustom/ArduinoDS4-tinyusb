@@ -8,13 +8,23 @@
 //   - RP2040     (arduino-pico core, USE_TINYUSB)
 //   - SAMD21/51  (adafruit:samd core, USB Stack = TinyUSB)
 //   - nRF52840   (adafruit:nrf52 core — always builds TinyUSB)
+//   - Renesas RA4M1 (arduino:renesas_uno core — Nano R4 / UNO R4 Minima;
+//     requires scripts/patch_renesas_core.sh + DISABLE_USB_SERIAL)
 #if (defined(ARDUINO_ARCH_RP2040) && defined(USE_TINYUSB)) || \
     (defined(ARDUINO_ARCH_SAMD) && defined(USE_TINYUSB)) || \
     (defined(ARDUINO_ARCH_NRF52) && defined(USE_TINYUSB)) || \
-    defined(ARDUINO_ARCH_ESP32)
+    defined(ARDUINO_ARCH_ESP32) || \
+    defined(ARDUINO_ARCH_RENESAS)
 
 #include <Arduino.h>
+#if defined(ARDUINO_ARCH_RENESAS)
+// The stock arduino:renesas_uno core has no Adafruit TinyUSB wrapper; the
+// patched core's weak hooks (__USBGetHIDReport/__USBGetVidPid) plus TinyUSB's
+// own HID class driver provide the interface instead.
+#include "tusb.h"
+#else
 #include <Adafruit_TinyUSB.h>
+#endif
 #include <functional>
 
 #if defined(ARDUINO_ARCH_RP2040)
@@ -27,16 +37,16 @@
 // USB CDC that begin() drops.
 #if defined(ARDUINO_ARCH_RP2040)
 #define DS4_DEBUG_SERIAL Serial1
-#elif defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52)
+#elif defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52) || defined(ARDUINO_ARCH_RENESAS)
 #define DS4_DEBUG_SERIAL Serial1
 #else
 #define DS4_DEBUG_SERIAL Serial0
 #endif
 
 // Formatted telemetry helper. The ESP32 and arduino-pico cores provide
-// Print::printf(); the Arduino SAMD and adafruit:nrf52 cores do not, so route
-// through a vsnprintf shim there. Usage: DS4_DBG_PRINTF(DS4_DEBUG_SERIAL, "x=%u\n", x);
-#if defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52)
+// Print::printf(); the Arduino SAMD, adafruit:nrf52 and Renesas cores do not,
+// so route through a vsnprintf shim there. Usage: DS4_DBG_PRINTF(DS4_DEBUG_SERIAL, "x=%u\n", x);
+#if defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52) || defined(ARDUINO_ARCH_RENESAS)
 #include <stdarg.h>
 #include <stdio.h>
 inline void ds4_dbg_printf(const char *fmt, ...) {
@@ -169,7 +179,9 @@ public:
                   uint8_t const *buffer, uint16_t bufsize);
 
 private:
+#if !defined(ARDUINO_ARCH_RENESAS)
   Adafruit_USBD_HID hid;
+#endif
 
   uint16_t buttonMask;
   uint8_t  axes[6];      // unsigned; sticks 0..255 (128 center), triggers 0..255
@@ -197,11 +209,11 @@ private:
 #if defined(ARDUINO_ARCH_RP2040)
   repeating_timer_t _timer;
   bool _timerStarted = false;
-#elif defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52)
-  // No free-running OS timer used on SAMD/nRF52: auto-send is cooperative.
-  // Due sends are flushed from the public setter entry points and ready();
-  // a sketch that calls any library API per loop iteration gets loop-rate
-  // polling, one that never calls in gets no auto-sends.
+#elif defined(ARDUINO_ARCH_SAMD) || defined(ARDUINO_ARCH_NRF52) || defined(ARDUINO_ARCH_RENESAS)
+  // No free-running OS timer used on SAMD/nRF52/Renesas: auto-send is
+  // cooperative. Due sends are flushed from the public setter entry points
+  // and ready(); a sketch that calls any library API per loop iteration gets
+  // loop-rate polling, one that never calls in gets no auto-sends.
   unsigned long _lastAutoSendMs = 0;
 #else
   esp_timer_handle_t _timerHandle = nullptr;
@@ -212,7 +224,7 @@ private:
   void _pumpAutoSend();
 #if defined(ARDUINO_ARCH_RP2040)
   static bool _timerCallback(struct repeating_timer *t);
-#elif !defined(ARDUINO_ARCH_SAMD) && !defined(ARDUINO_ARCH_NRF52)
+#elif !defined(ARDUINO_ARCH_SAMD) && !defined(ARDUINO_ARCH_NRF52) && !defined(ARDUINO_ARCH_RENESAS)
   static void IRAM_ATTR _timerCallback(void* arg);
 #endif
 };
