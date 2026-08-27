@@ -27,7 +27,7 @@
 # 3rd-party board manager indexes. Override with AVENV_ADDITIONAL_URLS
 # (space/newline separated) or pass them through your sketch.yaml profile's
 # platform_index_url instead.
-AVENV_ADDITIONAL_URLS="${AVENV_ADDITIONAL_URLS:-https://espressif.github.io/arduino-esp32/package_esp32_index.json https://files.seeedstudio.com/arduino/package_seeeduino_boards_index.json https://adafruit.github.io/arduino-board-index/package_adafruit_index.json https://static-cdn.m5stack.com/resource/arduino/package_m5stack_index.json https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json https://raw.githubusercontent.com/dmadison/ArduinoXInput_Boards/master/package_dmadison_xinput_index.json}"
+AVENV_ADDITIONAL_URLS="${AVENV_ADDITIONAL_URLS:-https://espressif.github.io/arduino-esp32/package_esp32_index.json https://files.seeedstudio.com/arduino/package_seeeduino_boards_index.json https://adafruit.github.io/arduino-board-index/package_adafruit_index.json https://static-cdn.m5stack.com/resource/arduino/package_m5stack_index.json https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json}"
 
 # Shared, read-only cache of installed cores/toolchains. Set to a persistent
 # path and populate it once with `aventools_prime` to avoid re-downloading
